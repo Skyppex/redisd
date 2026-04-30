@@ -19,4 +19,5 @@ pub enum Command {
     Pexpire { key: String, ms: u64 },
     Exists { key: String },
     Pttl { key: String },
+    Delete { key: String },
 }

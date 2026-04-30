@@ -67,7 +67,7 @@
       };
 
       devShells.default = pkgs.mkShell {
-        packages = [
+        packages = with pkgs; [
           toolchain
           nixd
           alejandra

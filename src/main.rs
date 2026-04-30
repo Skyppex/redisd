@@ -32,6 +32,7 @@ enum Message {
     Pexpire { key: String, ms: u64 },
     Exists { key: String },
     Pttl { key: String },
+    Delete { key: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -140,6 +141,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     match send_message(Message::Pttl { key }) {
                         Ok(Response::Ok(Some(val))) => println!("{}", val),
                         Ok(Response::Ok(None)) => {}
+                        Ok(Response::Error(e)) => eprintln!("error: {}", e),
+                        Err(e) => eprintln!("error: {}", e),
+                    }
+                }
+            }
+            Command::Delete { key } => {
+                if daemon_running() {
+                    match send_message(Message::Delete { key }) {
+                        Ok(Response::Ok(_)) => println!("OK"),
                         Ok(Response::Error(e)) => eprintln!("error: {}", e),
                         Err(e) => eprintln!("error: {}", e),
                     }
@@ -313,6 +323,14 @@ fn run_daemon() -> Result<(), Box<dyn Error>> {
                             if let Some(ref mut conn) = redis_conn {
                                 let val: i64 = redis::cmd("PTTL").arg(&key).query(conn)?;
                                 Response::Ok(Some(val.to_string()))
+                            } else {
+                                Response::Error("not connected".into())
+                            }
+                        }
+                        Message::Delete { key } => {
+                            if let Some(ref mut conn) = redis_conn {
+                                let _: () = redis::cmd("DEL").arg(&key).query(conn)?;
+                                Response::Ok(None)
                             } else {
                                 Response::Error("not connected".into())
                             }
