@@ -3,7 +3,7 @@ mod cli;
 use clap::Parser;
 use redis::{Commands, Connection};
 use std::error::Error;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -45,14 +45,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     if std::env::var("REDISD_DAEMON").is_ok() {
-        return run_daemon();
+        return run_daemon(cli.idle_timeout);
     }
 
     if let Some(cmd) = cli.subcommand {
         match cmd {
             Command::Connect { url } => {
                 if !daemon_running() {
-                    spawn_daemon()?;
+                    spawn_daemon(cli.idle_timeout)?;
                 }
 
                 match send_message(Message::Connect {
@@ -182,10 +182,15 @@ fn daemon_running() -> bool {
     Path::new(SOCKET_PATH).exists() && UnixStream::connect(SOCKET_PATH).is_ok()
 }
 
-fn spawn_daemon() -> Result<(), Box<dyn Error>> {
+fn spawn_daemon(idle_timeout: Option<cli::Duration>) -> Result<(), Box<dyn Error>> {
     let exe = std::env::current_exe()?;
-    process::Command::new(exe)
-        .env("REDISD_DAEMON", "1")
+    let mut cmd = &mut process::Command::new(exe);
+
+    if let Some(idle_timeout) = idle_timeout {
+        cmd = cmd.arg(format!("--idle-timeout={}", idle_timeout.milliseconds))
+    }
+
+    cmd.env("REDISD_DAEMON", "1")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -205,9 +210,15 @@ fn cleanup() {
     let _ = fs::remove_file(PID_FILE);
 }
 
-fn run_daemon() -> Result<(), Box<dyn Error>> {
+fn run_daemon(idle_timeout: Option<cli::Duration>) -> Result<(), Box<dyn Error>> {
+    let timeout_milliseconds = idle_timeout
+        .map(|d| d.milliseconds)
+        .unwrap_or(10 * 60 * 1000);
+
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
+    let last_activity = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+    let la = last_activity.clone();
 
     ctrlc::set_handler({
         let r = r.clone();
@@ -230,6 +241,12 @@ fn run_daemon() -> Result<(), Box<dyn Error>> {
     let mut redis_conn: Option<Connection> = None;
 
     while running.load(Ordering::SeqCst) {
+        {
+            let last = last_activity.lock().unwrap();
+            if last.elapsed().as_millis() as u64 > timeout_milliseconds {
+                break;
+            }
+        }
         match listener.accept() {
             Ok((stream, _)) => {
                 let mut reader = BufReader::new(&stream);
@@ -238,6 +255,10 @@ fn run_daemon() -> Result<(), Box<dyn Error>> {
                 if reader.read_line(&mut buf).is_ok()
                     && let Ok(msg) = serde_json::from_str::<Message>(buf.trim())
                 {
+                    {
+                        let mut last = la.lock().unwrap();
+                        *last = std::time::Instant::now();
+                    }
                     let response = match msg {
                         Message::Connect { url, .. } => match redis::Client::open(url.clone()) {
                             Ok(client) => match client.get_connection() {
@@ -350,6 +371,5 @@ fn run_daemon() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    cleanup();
-    Ok(())
+    std::process::exit(0);
 }
