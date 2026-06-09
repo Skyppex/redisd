@@ -161,10 +161,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// fn process_alive(pid: u32) -> bool {
-//     Path::new(&format!("/proc/{}", pid)).exists()
-// }
-
 fn send_message(msg: Message) -> Result<Response, Box<dyn Error>> {
     let mut stream = UnixStream::connect(SOCKET_PATH)?;
     let json = serde_json::to_string(&msg)?;
@@ -223,7 +219,7 @@ fn run_daemon(idle_timeout: Option<cli::Duration>) -> Result<(), Box<dyn Error>>
     ctrlc::set_handler({
         let r = r.clone();
         move || {
-            r.store(false, Ordering::SeqCst);
+            r.clone().store(false, Ordering::SeqCst);
         }
     })?;
 
@@ -371,5 +367,6 @@ fn run_daemon(idle_timeout: Option<cli::Duration>) -> Result<(), Box<dyn Error>>
         }
     }
 
+    cleanup();
     std::process::exit(0);
 }
